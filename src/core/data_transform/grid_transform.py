@@ -95,5 +95,8 @@ class SaveOriginalPosId:
     KEY = "origin_id"
 
     def __call__(self, data):
+        if hasattr(data,self.KEY):
+            return data
+            
         setattr(data, self.KEY, torch.arange(0, data.pos.shape[0]))
         return data

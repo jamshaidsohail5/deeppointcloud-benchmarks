@@ -418,6 +418,7 @@ class S3DISOriginalFused(InMemoryDataset):
         if train:
             self._center_labels = self.load_center_labels("train")
         else:
+            self.raw_test_data = torch.load(self.raw_areas_paths[test_area -1])
             self._center_labels = None
 
     @property
@@ -435,9 +436,21 @@ class S3DISOriginalFused(InMemoryDataset):
         return os.path.join(self.processed_dir, pre_processed_file_names)
 
     @property
+    def raw_areas_paths(self):
+        return [os.path.join(self.processed_dir, "raw_area_%i.pt" % i) for i in range(6)]
+
+    @property
     def processed_file_names(self):
         test_area = self.test_area
-        return ["{}_{}.pt".format(s, test_area) for s in ["train", "test"]]
+        return ["{}_{}.pt".format(s, test_area) for s in ["train", "test"]] + self.raw_areas_paths + self.pre_processed_path
+    
+    @property
+    def raw_test_data(self):
+        return self._raw_test_data
+
+    @raw_test_data.setter
+    def raw_test_data(self, value):
+        return self._raw_test_data = value
 
     def download(self):
         raw_folders = os.listdir(self.raw_dir)
@@ -499,7 +512,8 @@ class S3DISOriginalFused(InMemoryDataset):
                 for room_name in os.listdir(osp.join(self.raw_dir, f))
                 if os.path.isdir(osp.join(self.raw_dir, f, room_name))
             ]
-
+            
+            # Gather data per area
             data_list = [[] for _ in range(6)]
             for (area, room_name, file_path) in tq(train_files + test_files):
 
@@ -521,10 +535,16 @@ class S3DISOriginalFused(InMemoryDataset):
                     if self.pre_filter is not None and not self.pre_filter(data):
                         continue
 
-                    if self.pre_transform is not None:
-                        data = self.pre_transform(data)
-
                     data_list[area_num].append(data)
+
+            raw_areas = cT.PointCloudFusion()(data_list)
+            torch.save(raw_areas, self.raw_areas_path)
+
+            for area_datas in data_list:
+                # Apply pre_transform 
+                if self.pre_transform is not None:
+                    for data in area_datas:
+                        data = self.pre_transform(data)
 
             torch.save(data_list, self.pre_processed_path)
         else:
@@ -554,6 +574,11 @@ class S3DISOriginalFused(InMemoryDataset):
 class S3DISFusedDataset(BaseDataset):
     def __init__(self, dataset_opt):
         super().__init__(dataset_opt)
+
+        # Adding origin position id for upsampling
+        for t in [self.pre_transform, self.pre_collate_transform]:
+            if t:
+                t = T.Compose([cT.SaveOriginalPosId(), t])
 
         self.train_dataset = S3DISOriginalFused(
             self._data_path,
